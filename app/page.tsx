@@ -71,7 +71,7 @@ function getProviderLabel(provider?: GeneratedImage["provider"]): string {
 }
 
 function getDownloadFileName(image: GeneratedImage): string {
-  const extension = image.imageUrl.endsWith(".svg") ? "svg" : "png";
+  const extension = image.provider === "local-svg" ? "svg" : "png";
   return `minicity-${image.id}.${extension}`;
 }
 

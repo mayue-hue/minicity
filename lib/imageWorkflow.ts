@@ -17,6 +17,11 @@ type GenerateCityCardOptions = {
   apiKey?: string;
 };
 
+type PersistedImage = {
+  imageUrl: string;
+  persisted: boolean;
+};
+
 export async function generateCityCardImage(
   request: CityCardRequest,
   options: GenerateCityCardOptions = {}
@@ -79,10 +84,11 @@ export async function generateCityCardImage(
 
   const svg = renderLocalCitySvg({ cityProfile, weather, timeOfDay, seed });
   const fileName = `${cacheKey}.svg`;
-  const imagePath = path.join(generatedDir, fileName);
-
-  await fs.mkdir(generatedDir, { recursive: true });
-  await fs.writeFile(imagePath, svg, "utf8");
+  const persistedImage = await persistGeneratedImage({
+    fileName,
+    content: svg,
+    mimeType: "image/svg+xml"
+  });
 
   const generated: GeneratedImage = {
     id: cacheKey,
@@ -92,15 +98,17 @@ export async function generateCityCardImage(
     timeOfDay,
     prompt,
     negativePrompt,
-    imageUrl: `/generated/${fileName}`,
+    imageUrl: persistedImage.imageUrl,
     seed,
     cached: false,
     createdAt: new Date().toISOString(),
     provider: "local-svg"
   };
 
-  cache[cacheKey] = generated;
-  await writeCache(cache);
+  if (persistedImage.persisted) {
+    cache[cacheKey] = generated;
+    await writeCache(cache);
+  }
 
   return generated;
 }
@@ -134,8 +142,12 @@ async function readCache(): Promise<ImageCache> {
 }
 
 async function writeCache(cache: ImageCache): Promise<void> {
-  await fs.mkdir(path.dirname(cacheFile), { recursive: true });
-  await fs.writeFile(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+  try {
+    await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+    await fs.writeFile(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+  } catch (error) {
+    console.warn("Image cache is not writable; continuing without persistent cache.", error);
+  }
 }
 
 function stableSeed(input: string): number {
@@ -205,10 +217,11 @@ async function generateOpenAIBackedImage({
     referenceImages
   });
   const fileName = `${cacheKey}.png`;
-  const imagePath = path.join(generatedDir, fileName);
-
-  await fs.mkdir(generatedDir, { recursive: true });
-  await fs.writeFile(imagePath, imageBytes);
+  const persistedImage = await persistGeneratedImage({
+    fileName,
+    content: imageBytes,
+    mimeType: "image/png"
+  });
 
   const generated: GeneratedImage = {
     id: cacheKey,
@@ -218,15 +231,48 @@ async function generateOpenAIBackedImage({
     timeOfDay,
     prompt,
     negativePrompt,
-    imageUrl: `/generated/${fileName}`,
+    imageUrl: persistedImage.imageUrl,
     seed,
     cached: false,
     createdAt: new Date().toISOString(),
     provider: "openai-image"
   };
 
-  cache[cacheKey] = generated;
-  await writeCache(cache);
+  if (persistedImage.persisted) {
+    cache[cacheKey] = generated;
+    await writeCache(cache);
+  }
 
   return generated;
+}
+
+async function persistGeneratedImage({
+  fileName,
+  content,
+  mimeType
+}: {
+  fileName: string;
+  content: Buffer | string;
+  mimeType: "image/png" | "image/svg+xml";
+}): Promise<PersistedImage> {
+  const imagePath = path.join(generatedDir, fileName);
+
+  try {
+    await fs.mkdir(generatedDir, { recursive: true });
+    await fs.writeFile(imagePath, content);
+
+    return {
+      imageUrl: `/generated/${fileName}`,
+      persisted: true
+    };
+  } catch (error) {
+    console.warn("Generated image directory is not writable; returning inline image data.", error);
+
+    const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
+
+    return {
+      imageUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
+      persisted: false
+    };
+  }
 }
